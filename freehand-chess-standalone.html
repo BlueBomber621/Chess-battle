@@ -1,0 +1,736 @@
+<!-- Freehand Chess (STANDALONE): open this .html directly in a browser. Paste your own Anthropic API key into the bar at the top; it stays in the tab's memory only and is never written to the file. The Claude API plays Black with full move memory, spoken commentary, questions your illegal moves, enforces its own legal play, and reflects on the game afterward. Note: this direct-key version does NOT run inside the Claude.ai artifact preview (that environment blocks outside calls) — save it and open it as a normal webpage. -->
+<div id="root"></div>
+
+<style>
+  :root {
+    --bg: #12100d;
+    --panel: #1c1915;
+    --line: #2e2a23;
+    --ink: #efe9dc;
+    --muted: #9a9283;
+    --light: #d8cbb0;
+    --dark: #6b5a3f;
+    --accent: #c8532b;
+    --accent-soft: #e0946c;
+    --sel: #4c8a5a;
+    --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --font-body: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+
+  #root { font-family: var(--font-body); color: var(--ink); }
+
+  * { box-sizing: border-box; }
+
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  header.masthead {
+    border-bottom: 2px solid var(--line);
+    padding-bottom: 12px;
+  }
+  .kicker {
+    font-size: 11px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--accent-soft);
+    margin: 0 0 4px;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 34px;
+    line-height: 0.95;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  h1 em { color: var(--accent); font-style: italic; }
+  .sub {
+    color: var(--muted);
+    font-size: 12px;
+    margin: 8px 0 0;
+    max-width: 52ch;
+    line-height: 1.5;
+  }
+
+  .board-frame {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 14px;
+    align-self: center;
+    box-shadow: 0 18px 50px -30px #000;
+  }
+  .coords-row { display: flex; }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    width: min(88vw, 480px);
+    aspect-ratio: 1;
+    border: 2px solid var(--dark);
+  }
+  .sq {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 1;
+    font-size: clamp(24px, 8vw, 44px);
+    line-height: 1;
+    cursor: pointer;
+    position: relative;
+    user-select: none;
+    transition: background 0.08s;
+  }
+  .sq.light { background: var(--light); }
+  .sq.dark  { background: var(--dark); }
+  .sq.sel::after {
+    content: "";
+    position: absolute; inset: 0;
+    box-shadow: inset 0 0 0 3px var(--sel);
+  }
+  .sq.lastmove::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: var(--accent);
+    opacity: 0.22;
+  }
+  .pc { position: relative; z-index: 2; }
+  .pc.white { color: #faf6ee; text-shadow: 0 1px 1px #000, 0 0 2px #6b6255; }
+  .pc.black { color: #17130d; text-shadow: 0 1px 0 #8f8574; }
+
+  .files, .ranks { color: var(--muted); font-size: 10px; letter-spacing: 0.1em; }
+  .files { display: grid; grid-template-columns: repeat(8,1fr); width: min(88vw,480px); margin-left: 18px; padding-top: 4px; }
+  .files span { text-align: center; }
+  .ranks { display: flex; flex-direction: column; justify-content: space-around; width: 18px; }
+
+  .statusline {
+    display: flex; align-items: baseline; gap: 10px;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 2px;
+  }
+  .turn-tag {
+    font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--accent-soft);
+  }
+  .status-msg { color: var(--ink); font-size: 13px; }
+  .thinking { color: var(--muted); font-style: italic; }
+
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+  button.btn {
+    font-family: var(--font-body);
+    font-size: 12px;
+    letter-spacing: 0.05em;
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s;
+  }
+  button.btn:hover { border-color: var(--accent); color: var(--accent-soft); }
+  button.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.btn:disabled { opacity: 0.4; cursor: default; }
+
+  .log {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 12px 14px;
+    max-height: 150px;
+    overflow-y: auto;
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .log h2 {
+    font-family: var(--font-display);
+    font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 6px;
+  }
+  .log .mv { display: inline-block; margin-right: 12px; }
+  .log .mv b { color: var(--accent-soft); font-weight: 400; }
+  .log .empty { color: var(--muted); font-style: italic; }
+
+  .hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+  .keybar {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .keybar .who {
+    font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--accent-soft); margin: 0;
+  }
+  .keybar .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .keybar input {
+    flex: 1 1 180px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    background: var(--bg);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    padding: 9px 12px;
+  }
+  .keybar input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .keybar .note { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 0; }
+  .keybar .note.good { color: var(--sel); }
+  .keybar .note.bad { color: var(--accent-soft); }
+
+  .speech {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    padding: 12px 14px;
+    min-height: 46px;
+  }
+  .speech .who {
+    font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--accent-soft); margin: 0 0 4px;
+  }
+  .speech .said {
+    font-family: var(--font-display);
+    font-size: 15px; line-height: 1.4; color: var(--ink); margin: 0;
+  }
+  .speech .said.quiet { color: var(--muted); font-style: italic; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<script type="module">
+  const $ = (s, r=document) => r.querySelector(s);
+
+  // Direct browser call to the Anthropic API using the key pasted into the page.
+  // The key lives only in state (this tab's memory); it is never written to the file.
+  function apiHeaders() {
+    return {
+      "Content-Type": "application/json",
+      "x-api-key": state.apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    };
+  }
+
+  // ---- piece glyphs ----
+  const GLYPH = {
+    wK:"\u2654", wQ:"\u2655", wR:"\u2656", wB:"\u2657", wN:"\u2658", wP:"\u2659",
+    bK:"\u265A", bQ:"\u265B", bR:"\u265C", bB:"\u265D", bN:"\u265E", bP:"\u265F"
+  };
+
+  // ---- initial position: player = white (bottom), Claude API = black (top) ----
+  function freshBoard() {
+    const back = ["R","N","B","Q","K","B","N","R"];
+    const b = Array.from({length:8}, ()=>Array(8).fill(null));
+    for (let i=0;i<8;i++){
+      b[0][i] = "b"+back[i];
+      b[1][i] = "bP";
+      b[6][i] = "wP";
+      b[7][i] = "w"+back[i];
+    }
+    return b;
+  }
+
+  const state = {
+    board: freshBoard(),
+    turn: "w",          // player is always white
+    sel: null,          // [r,c]
+    last: null,         // [[r,c],[r,c]]
+    history: [],        // {n, w, b}
+    busy: false,
+    over: false,
+    speech: "Waiting for your first move.",
+    apiKey: ""
+  };
+
+  const files = ["a","b","c","d","e","f","g","h"];
+  const sqName = (r,c) => files[c] + (8-r);
+
+  // ---- render ----
+  function render() {
+    const root = $("#root");
+    root.innerHTML = `
+      <div class="wrap">
+        <header class="masthead">
+          <p class="kicker">You vs. the Claude API</p>
+          <h1>Freehand <em>Chess</em></h1>
+          <p class="sub">You move first. Pick up any of your pieces and drop it on any square you like &mdash; the rules don't apply to you. Your opponent believes it's an ordinary game and answers every move in earnest.</p>
+        </header>
+
+        <div class="keybar">
+          <p class="who">Anthropic API key</p>
+          <div class="row">
+            <input id="keyinput" type="password" placeholder="sk-ant-\u2026" autocomplete="off" spellcheck="false" />
+            <button class="btn" id="keyset">Use key</button>
+          </div>
+          <p class="note" id="keynote">Paste your key to enable the opponent. It stays in this tab only \u2014 never saved to the file.</p>
+        </div>
+
+        <div class="board-frame">
+          <div class="coords-row">
+            <div class="ranks" id="ranks"></div>
+            <div>
+              <div class="board" id="board"></div>
+            </div>
+          </div>
+          <div class="files" id="files"></div>
+        </div>
+
+        <div class="statusline">
+          <span class="turn-tag" id="turntag"></span>
+          <span class="status-msg" id="status"></span>
+        </div>
+
+        <div class="speech">
+          <p class="who">Black &mdash; the API</p>
+          <p class="said quiet" id="speech">Waiting for your first move.</p>
+        </div>
+
+        <div class="controls">
+          <button class="btn" id="reset">New game</button>
+          <button class="btn" id="pass">Skip my turn</button>
+        </div>
+
+        <div class="log">
+          <h2>Move log</h2>
+          <div id="movelist"></div>
+        </div>
+
+        <p class="hint">Tap a piece, then tap where it should go. Any square is legal &mdash; capture, teleport, stack the odds however you like. The API opponent responds to the position it sees.</p>
+      </div>`;
+
+    // ranks / files labels
+    $("#ranks").innerHTML = [8,7,6,5,4,3,2,1].map(n=>`<span>${n}</span>`).join("");
+    $("#files").innerHTML = files.map(f=>`<span>${f}</span>`).join("");
+
+    drawBoard();
+    drawStatus();
+    drawLog();
+    drawSpeech();
+
+    $("#reset").onclick = newGame;
+    $("#pass").onclick = () => { if(!state.busy && !state.over){ pushHistory(null); aiTurn(); } };
+
+    const keyInput = $("#keyinput");
+    const keyNote = $("#keynote");
+    if (keyInput) {
+      keyInput.value = state.apiKey;
+      const applyKey = () => {
+        state.apiKey = keyInput.value.trim();
+        if (state.apiKey) {
+          keyNote.textContent = "Key set for this session. The opponent is live.";
+          keyNote.className = "note good";
+        } else {
+          keyNote.textContent = "No key yet \u2014 the opponent can't respond until you add one.";
+          keyNote.className = "note bad";
+        }
+      };
+      $("#keyset").onclick = applyKey;
+      keyInput.onkeydown = (e) => { if (e.key === "Enter") applyKey(); };
+      if (state.apiKey) { keyNote.textContent = "Key set for this session. The opponent is live."; keyNote.className = "note good"; }
+    }
+  }
+
+  function drawSpeech(thinking=false) {
+    const el = $("#speech");
+    if (!el) return;
+    if (thinking) { el.className = "said quiet"; el.textContent = "considering the position\u2026"; return; }
+    el.className = "said" + (state.speech ? "" : " quiet");
+    el.textContent = state.speech || "\u2026";
+  }
+
+  function drawBoard() {
+    const board = $("#board");
+    let html = "";
+    for (let r=0;r<8;r++){
+      for (let c=0;c<8;c++){
+        const shade = (r+c)%2===0 ? "light" : "dark";
+        const pc = state.board[r][c];
+        const isSel = state.sel && state.sel[0]===r && state.sel[1]===c;
+        const isLast = state.last && (
+          (state.last[0][0]===r && state.last[0][1]===c) ||
+          (state.last[1][0]===r && state.last[1][1]===c));
+        const cls = ["sq", shade, isSel?"sel":"", isLast?"lastmove":""].filter(Boolean).join(" ");
+        const glyph = pc ? `<span class="pc ${pc[0]==="w"?"white":"black"}">${GLYPH[pc]}</span>` : "";
+        html += `<div class="${cls}" data-r="${r}" data-c="${c}" role="button" aria-label="${sqName(r,c)}">${glyph}</div>`;
+      }
+    }
+    board.innerHTML = html;
+    board.querySelectorAll(".sq").forEach(el=>{
+      el.onclick = () => onSquare(+el.dataset.r, +el.dataset.c);
+    });
+  }
+
+  function drawStatus() {
+    const tag = $("#turntag"), msg = $("#status");
+    if (state.over) { tag.textContent = "Game over"; msg.textContent = state.over; return; }
+    if (state.busy) { tag.textContent = "Black"; msg.innerHTML = `<span class="thinking">the API is thinking\u2026</span>`; return; }
+    tag.textContent = state.turn === "w" ? "Your move" : "Black";
+    msg.textContent = state.turn === "w" ? "Move any piece, anywhere." : "";
+  }
+
+  function drawLog() {
+    const list = $("#movelist");
+    if (!state.history.length) { list.innerHTML = `<span class="empty">No moves yet.</span>`; return; }
+    list.innerHTML = state.history.map(h =>
+      `<span class="mv"><b>${h.n}.</b> ${h.w||"\u2026"} ${h.b||""}</span>`).join("");
+    list.scrollTop = list.scrollHeight;
+  }
+
+  // ---- player interaction: no legality checks at all ----
+  function onSquare(r,c) {
+    if (state.busy || state.over || state.turn!=="w") return;
+    const pc = state.board[r][c];
+    if (state.sel) {
+      const [sr,sc] = state.sel;
+      if (sr===r && sc===c) { state.sel=null; drawBoard(); return; }
+      const moving = state.board[sr][sc];
+      if (!moving) { state.sel = pc ? [r,c] : null; drawBoard(); return; }
+      // execute the (illegal-by-design) move
+      const notation = notate(moving, [sr,sc], [r,c], state.board[r][c]);
+      state.board[r][c] = moving;
+      state.board[sr][sc] = null;
+      // free promotion: if a pawn reaches the far rank, auto-queen (your choice, cheater's perk)
+      if (moving==="wP" && r===0) state.board[r][c]="wQ";
+      state.last = [[sr,sc],[r,c]];
+      state.sel = null;
+      pushHistory(notation);
+      drawBoard();
+      if (checkEnd()) return;      // you captured the black king outright
+      if (endByRule()) return;     // your move delivered checkmate/stalemate
+      aiTurn();
+    } else {
+      if (pc && pc[0]==="w") { state.sel=[r,c]; drawBoard(); }
+    }
+  }
+
+  function notate(pc, from, to, captured) {
+    const letter = pc[1]==="P" ? "" : pc[1];
+    return `${letter}${sqName(...from)}${captured?"x":"-"}${sqName(...to)}`;
+  }
+
+  function pushHistory(whiteMove, blackMove) {
+    if (state.turn === "w") {
+      state.history.push({ n: state.history.length+1, w: whiteMove||"(skip)", b: "" });
+      state.turn = "b";
+    } else {
+      const cur = state.history[state.history.length-1];
+      if (cur) cur.b = blackMove||"(skip)";
+      state.turn = "w";
+    }
+    drawStatus(); drawLog();
+  }
+
+  function checkEnd() {
+    // only ends when a king is gone
+    let wK=false, bK=false;
+    for (const row of state.board) for (const p of row) {
+      if (p==="wK") wK=true; if (p==="bK") bK=true;
+    }
+    if (!bK) {
+      state.over = "You captured the black king. You win.";
+      state.turn=null;
+      state.speech = "\u2026my king. Let me gather my thoughts on that.";
+      drawStatus(); drawSpeech(); drawBoard();
+      reactToAftermath("king-captured", "White (the human) captured my king directly and the game is over. I (Black) lost.");
+      return true;
+    }
+    if (!wK) {
+      state.over = "Your king is gone. The API wins.";
+      state.turn=null;
+      state.speech = "The white king has fallen \u2014 let me reflect.";
+      drawStatus(); drawSpeech(); drawBoard();
+      reactToAftermath("won", "Black (me) captured White's king. I won the game.");
+      return true;
+    }
+    return false;
+  }
+
+  // ---- describe board to the API in FEN-ish plain form ----
+  function boardText() {
+    // ASCII grid from black's nothing-special view; we give plain coordinates.
+    let lines = [];
+    for (let r=0;r<8;r++){
+      let cells=[];
+      for (let c=0;c<8;c++){
+        const p = state.board[r][c];
+        cells.push(p ? (p[0]==="w"?p[1]:p[1].toLowerCase()) : ".");
+      }
+      lines.push(`${8-r} ${cells.join(" ")}`);
+    }
+    lines.push("  a b c d e f g h");
+    return lines.join("\n");
+  }
+
+  // ---- Claude API opponent (full game memory + spoken comment) ----
+  function historyText() {
+    if (!state.history.length) return "No moves have been played yet.";
+    return state.history.map(h =>
+      `${h.n}. White: ${h.w||"\u2026"}${h.b?`   Black: ${h.b}`:""}`).join("\n");
+  }
+
+  async function aiTurn() {
+    if (state.over) return;
+    // If your move already left Black with no legal reply, resolve immediately.
+    if (legalMoves(state.board, "b").length===0) { endByRule(); return; }
+    if (!state.apiKey) {
+      state.speech = "Add your API key above and I'll respond.";
+      drawSpeech();
+      return;
+    }
+    state.busy = true; drawStatus(); drawSpeech(true);
+
+    const sys = `You are playing a serious game of chess as Black against a human opponent (White). Speak like a thoughtful, competitive chess player: reference the ongoing game, your plans, threats, and how the position is developing. You have the full move history each turn, so treat the game as one continuous match and let your comments build on earlier moves.
+
+Board notation: uppercase = White pieces, lowercase = Black pieces, "." = empty square. You are Black and must move a lowercase piece.
+
+Pay attention to White's last move in the history. If it looks unusual, illegal, or impossible for a chess piece — a piece that moved in a way it shouldn't be able to, a piece that appeared out of nowhere, a jump across the board, a capture that shouldn't be possible — call it out directly in your comment. Question it the way a real opponent would: puzzled, a little suspicious, maybe accusing them of cheating. But do not stop playing: still choose your best legal Black move for the position in front of you and play on.
+
+Respond with ONLY a strict JSON object, no prose outside it, no markdown fences:
+{"from":"e7","to":"e5","say":"one or two sentences: react to White's last move (question it if it looked illegal), then comment on your own move and the position"}
+Use standard square names (files a-h, ranks 1-8).`;
+
+    const checkNote = inCheck(state.board, "b")
+      ? "\n\nIMPORTANT: your king is currently in CHECK. You must make a move that gets out of check."
+      : "";
+
+    const user = `Move history so far:
+${historyText()}
+
+Current position:
+${boardText()}${checkNote}
+
+It is Black's turn. Decide your move and comment on it.`;
+
+    let move = null, say = "";
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          system: sys,
+          messages: [{ role: "user", content: user }]
+        })
+      });
+      const data = await res.json();
+      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
+      const clean = text.replace(/```json|```/g,"").trim();
+      const parsed = JSON.parse(clean.slice(clean.indexOf("{"), clean.lastIndexOf("}")+1));
+      move = parsed; say = parsed.say || parsed.note || "";
+    } catch (e) {
+      move = null;
+    }
+
+    applyAiMove(move, say);
+  }
+
+  function parseSq(s){
+    if (!s || s.length<2) return null;
+    const c = files.indexOf(s[0].toLowerCase());
+    const r = 8 - parseInt(s[1],10);
+    if (c<0 || r<0 || r>7) return null;
+    return [r,c];
+  }
+
+  // ================= Black-side chess rules engine =================
+  // The player (White) is unrestricted. Black must obey real chess rules:
+  // correct piece movement, no jumping, no self-capture, no moving into check.
+
+  const inB = (r,c) => r>=0 && r<8 && c>=0 && c<8;
+
+  // pseudo-legal destinations for a piece at [r,c] on a given board (ignores own-king safety)
+  function pieceMoves(bd, r, c) {
+    const p = bd[r][c]; if (!p) return [];
+    const side = p[0], type = p[1];
+    const enemy = side==="w" ? "b" : "w";
+    const out = [];
+    const push = (tr,tc) => {
+      if (!inB(tr,tc)) return false;
+      const d = bd[tr][tc];
+      if (!d) { out.push([tr,tc]); return true; }
+      if (d[0]===enemy) out.push([tr,tc]);
+      return false; // blocked
+    };
+    const ray = (dr,dc) => { let tr=r+dr, tc=c+dc; while(inB(tr,tc)){ if(!push(tr,tc)) break; tr+=dr; tc+=dc; } };
+
+    if (type==="P") {
+      const dir = side==="w" ? -1 : 1;
+      const start = side==="w" ? 6 : 1;
+      if (inB(r+dir,c) && !bd[r+dir][c]) {
+        out.push([r+dir,c]);
+        if (r===start && !bd[r+2*dir][c]) out.push([r+2*dir,c]);
+      }
+      for (const dc of [-1,1]) {
+        const tr=r+dir, tc=c+dc;
+        if (inB(tr,tc) && bd[tr][tc] && bd[tr][tc][0]===enemy) out.push([tr,tc]);
+      }
+    } else if (type==="N") {
+      [[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]].forEach(([dr,dc])=>push(r+dr,c+dc));
+    } else if (type==="B") {
+      [[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc])=>ray(dr,dc));
+    } else if (type==="R") {
+      [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dr,dc])=>ray(dr,dc));
+    } else if (type==="Q") {
+      [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc])=>ray(dr,dc));
+    } else if (type==="K") {
+      [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc])=>push(r+dr,c+dc));
+    }
+    return out;
+  }
+
+  function findKing(bd, side) {
+    for (let r=0;r<8;r++) for (let c=0;c<8;c++) if (bd[r][c]===side+"K") return [r,c];
+    return null;
+  }
+
+  // is `side`'s king attacked on board bd?
+  function inCheck(bd, side) {
+    const k = findKing(bd, side); if (!k) return false;
+    const enemy = side==="w" ? "b" : "w";
+    for (let r=0;r<8;r++) for (let c=0;c<8;c++){
+      if (bd[r][c] && bd[r][c][0]===enemy){
+        for (const [tr,tc] of pieceMoves(bd,r,c)) if (tr===k[0]&&tc===k[1]) return true;
+      }
+    }
+    return false;
+  }
+
+  function cloneBoard(bd){ return bd.map(row=>row.slice()); }
+
+  // fully legal moves for a side (filters out moves leaving own king in check)
+  function legalMoves(bd, side) {
+    const moves = [];
+    for (let r=0;r<8;r++) for (let c=0;c<8;c++){
+      if (bd[r][c] && bd[r][c][0]===side){
+        for (const [tr,tc] of pieceMoves(bd,r,c)){
+          const nb = cloneBoard(bd);
+          nb[tr][tc] = nb[r][c]; nb[r][c] = null;
+          if (nb[tr][tc][1]==="P" && (tr===0||tr===7)) nb[tr][tc]=side+"Q";
+          if (!inCheck(nb, side)) moves.push([[r,c],[tr,tc]]);
+        }
+      }
+    }
+    return moves;
+  }
+
+  const sameSq = (a,b) => a[0]===b[0] && a[1]===b[1];
+
+  function applyAiMove(move, say) {
+    const legal = legalMoves(state.board, "b");
+
+    // No legal Black move: it's checkmate or stalemate on Black -> resolved by caller flow
+    if (!legal.length) {
+      state.speech = say || "\u2026";
+      state.busy = false;
+      drawBoard(); drawStatus(); drawSpeech();
+      return endByRule();
+    }
+
+    let from = move && parseSq(move.from);
+    let to   = move && parseSq(move.to);
+
+    // accept the API's move only if it's actually legal for Black
+    let chosen = null;
+    if (from && to) chosen = legal.find(m => sameSq(m[0],from) && sameSq(m[1],to)) || null;
+    // otherwise pick a legal move for it (prefer captures) so it never plays illegally
+    if (!chosen) {
+      const caps = legal.filter(([f,t]) => state.board[t[0]][t[1]]);
+      const pool = caps.length ? caps : legal;
+      chosen = pool[(Math.random()*pool.length)|0];
+      if (!say) say = "I'll keep my position solid here.";
+    }
+
+    const [f, t] = chosen;
+    const pc = state.board[f[0]][f[1]];
+    const cap = state.board[t[0]][t[1]];
+    state.board[t[0]][t[1]] = pc;
+    state.board[f[0]][f[1]] = null;
+    if (pc==="bP" && t[0]===7) state.board[t[0]][t[1]]="bQ";
+    state.last = [f,t];
+    const givesCheck = inCheck(state.board, "w");
+    const notation = notate(pc, f, t, cap) + (givesCheck ? "+" : "");
+    pushHistory(undefined, notation);
+
+    state.speech = say || "\u2026";
+    state.busy = false;
+    drawBoard(); drawStatus(); drawSpeech();
+
+    if (checkEnd()) return;      // king actually captured (your illegal moves can still do this)
+    endByRule();                 // check White for checkmate/stalemate
+  }
+
+  // After a move, detect checkmate/stalemate on Black (you winning) — your unrestricted
+  // moves mean you're never truly mated, so we only rule on Black's position.
+  function endByRule() {
+    const blackMoves = legalMoves(state.board, "b");
+    const blackChecked = inCheck(state.board, "b");
+    if (blackMoves.length===0) {
+      if (blackChecked) {
+        state.over = "Checkmate. The black king has no escape \u2014 you win.";
+        state.speech = "That's mate\u2026 give me a moment.";
+        reactToAftermath("checkmate", "White (the human) checkmated me. I (Black) lost.");
+      } else {
+        state.over = "Stalemate. Black has no legal move \u2014 the game is drawn.";
+        state.speech = "Stalemate\u2026 let me look back at that.";
+        reactToAftermath("stalemate", "The game ended in stalemate \u2014 a draw. I (Black) had no legal move but was not in check.");
+      }
+      state.turn = null;
+      drawStatus(); drawSpeech(); drawBoard();
+      return true;
+    }
+    return false;
+  }
+
+  // Live end-of-game reflection from the API on how the whole game played out.
+  async function reactToAftermath(kind, outcomeLine) {
+    if (!state.apiKey) return;
+    const sys = `You just finished a serious game of chess playing as Black against a human (White). The game is now over. Look back over the entire game and give a genuine post-game reflection: how the game went, turning points, moments that surprised or troubled you, and a gracious closing word to your opponent. Two to four sentences, spoken in your own voice as the player. Plain text only \u2014 no JSON, no quotes around it.`;
+    const user = `Full move history:
+${historyText()}
+
+Final position:
+${boardText()}
+
+Result: ${outcomeLine}
+
+Reflect on the game now that it's over.`;
+
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          system: sys,
+          messages: [{ role: "user", content: user }]
+        })
+      });
+      const data = await res.json();
+      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
+      if (text) { state.speech = text.replace(/^["']|["']$/g,""); drawSpeech(); }
+    } catch (e) { /* keep the interim line */ }
+  }
+
+  function newGame() {
+    Object.assign(state, {
+      board: freshBoard(), turn:"w", sel:null, last:null,
+      history:[], busy:false, over:false,
+      speech:"Waiting for your first move."
+    });
+    render();
+  }
+
+  render();
+</script>
