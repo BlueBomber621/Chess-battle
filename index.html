@@ -1,4 +1,4 @@
-<!-- Freehand Chess (STANDALONE): open this .html directly in a browser. Paste your own Anthropic API key into the bar at the top; it stays in the tab's memory only and is never written to the file. The Claude API plays Black with full move memory, spoken commentary, questions your illegal moves, enforces its own legal play, and reflects on the game afterward. Note: this direct-key version does NOT run inside the Claude.ai artifact preview (that environment blocks outside calls) — save it and open it as a normal webpage. -->
+<!-- Freehand Chess (STANDALONE): open this .html directly in a browser. Paste your own Anthropic API key into the bar at the top; it stays in the tab's memory only and is never written to the file. The Claude API plays Black with full move memory, spoken commentary, questions your illegal moves, enforces its own legal play, and reflects on the game afterward. GOD MODE lets you edit the board at will, grant extra turns to either side, and forge brand-new pieces (including absurd ones) that the rules engine and the API both understand. Note: this direct-key version does NOT run inside the Claude.ai artifact preview (that environment blocks outside calls) — save it and open it as a normal webpage. -->
 <div id="root"></div>
 
 <style>
@@ -54,7 +54,7 @@
     color: var(--muted);
     font-size: 12px;
     margin: 8px 0 0;
-    max-width: 52ch;
+    max-width: 56ch;
     line-height: 1.5;
   }
 
@@ -65,6 +65,7 @@
     align-self: center;
     box-shadow: 0 18px 50px -30px #000;
   }
+  .board-frame.editing { border-color: var(--sel); box-shadow: 0 0 0 1px var(--sel), 0 18px 50px -30px #000; }
   .coords-row { display: flex; }
   .board {
     display: grid;
@@ -73,6 +74,7 @@
     aspect-ratio: 1;
     border: 2px solid var(--dark);
   }
+  .board.editing { cursor: crosshair; }
   .sq {
     display: flex;
     align-items: center;
@@ -101,6 +103,14 @@
   .pc { position: relative; z-index: 2; }
   .pc.white { color: #faf6ee; text-shadow: 0 1px 1px #000, 0 0 2px #6b6255; }
   .pc.black { color: #17130d; text-shadow: 0 1px 0 #8f8574; }
+  /* custom pieces: glyph sits in a side-colored chip so White vs Black reads clearly */
+  .pc.custom {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 0.98em; height: 0.98em; border-radius: 50%;
+    font-size: 0.68em; text-shadow: none;
+  }
+  .pc.custom.white { background: #faf6ee; color: #17130d; box-shadow: 0 0 0 2px #6b6255; }
+  .pc.custom.black { background: #17130d; color: #faf6ee; box-shadow: 0 0 0 2px #8f8574; }
 
   .files, .ranks { color: var(--muted); font-size: 10px; letter-spacing: 0.1em; }
   .files { display: grid; grid-template-columns: repeat(8,1fr); width: min(88vw,480px); margin-left: 18px; padding-top: 4px; }
@@ -131,11 +141,12 @@
     border: 1px solid var(--line);
     padding: 8px 14px;
     cursor: pointer;
-    transition: border-color 0.12s, color 0.12s;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
   }
   button.btn:hover { border-color: var(--accent); color: var(--accent-soft); }
   button.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button.btn:disabled { opacity: 0.4; cursor: default; }
+  button.btn.on { border-color: var(--sel); color: var(--sel); }
 
   .log {
     background: var(--panel);
@@ -153,20 +164,22 @@
   }
   .log .mv { display: inline-block; margin-right: 12px; }
   .log .mv b { color: var(--accent-soft); font-weight: 400; }
+  .log .side { font-size: 10px; letter-spacing: 0.1em; }
+  .log .side.w { color: var(--light); }
+  .log .side.b { color: var(--muted); }
   .log .empty { color: var(--muted); font-style: italic; }
 
   .hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
 
-  .keybar {
+  /* ---- shared panel look ---- */
+  .keybar, .speech, .godbar {
     background: var(--panel);
     border: 1px solid var(--line);
     border-left: 3px solid var(--accent);
     padding: 12px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
   }
-  .keybar .who {
+  .keybar { display: flex; flex-direction: column; gap: 8px; }
+  .keybar .who, .godbar .who {
     font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
     color: var(--accent-soft); margin: 0;
   }
@@ -185,13 +198,7 @@
   .keybar .note.good { color: var(--sel); }
   .keybar .note.bad { color: var(--accent-soft); }
 
-  .speech {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-left: 3px solid var(--accent);
-    padding: 12px 14px;
-    min-height: 46px;
-  }
+  .speech { border-left-color: var(--accent); min-height: 46px; }
   .speech .who {
     font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase;
     color: var(--accent-soft); margin: 0 0 4px;
@@ -201,6 +208,66 @@
     font-size: 15px; line-height: 1.4; color: var(--ink); margin: 0;
   }
   .speech .said.quiet { color: var(--muted); font-style: italic; }
+
+  /* ---- god mode panel ---- */
+  .godbar { border-left-color: var(--sel); display: flex; flex-direction: column; gap: 14px; }
+  .godbar .god-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .godbar .who.god { color: var(--sel); }
+  .godbar section { display: flex; flex-direction: column; gap: 8px; }
+  .godbar .seclabel {
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--muted); margin: 0;
+  }
+  .godbar .rowline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .godbar .divider { border: none; border-top: 1px solid var(--line); margin: 2px 0; }
+
+  .palette { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .swatch {
+    font-family: var(--font-body);
+    min-width: 40px;
+    display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px;
+    background: var(--bg);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    padding: 6px 8px;
+    cursor: pointer;
+    font-size: 22px; line-height: 1;
+  }
+  .swatch small { font-size: 8px; letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; }
+  .swatch:hover { border-color: var(--accent); }
+  .swatch.sel { border-color: var(--sel); box-shadow: inset 0 0 0 1px var(--sel); }
+  .swatch.erase { font-size: 12px; color: var(--accent-soft); }
+
+  .chip {
+    font-size: 11px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    padding: 4px 8px;
+    color: var(--muted);
+    display: inline-flex; gap: 6px; align-items: baseline;
+  }
+  .chip b { color: var(--ink); font-weight: 400; }
+
+  .forge { display: flex; flex-direction: column; gap: 8px; }
+  .forge .frow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .forge input[type=text] {
+    font-family: var(--font-body); font-size: 13px;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); padding: 7px 10px;
+  }
+  .forge input.name { flex: 1 1 160px; }
+  .forge input.glyph { width: 64px; text-align: center; font-size: 18px; }
+  .forge input.leaps { flex: 1 1 160px; }
+  .forge input:focus-visible { outline: 2px solid var(--sel); outline-offset: 1px; }
+  .forge label.chk {
+    font-size: 11px; color: var(--ink);
+    display: inline-flex; gap: 5px; align-items: center;
+    border: 1px solid var(--line); padding: 5px 9px; cursor: pointer;
+  }
+  .forge label.chk input { accent-color: var(--sel); }
+  .forge .fieldlabel { font-size: 10px; color: var(--muted); letter-spacing: 0.06em; }
+  .forge .err { color: var(--accent-soft); font-size: 11px; margin: 0; }
 
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
@@ -221,11 +288,52 @@
     };
   }
 
-  // ---- piece glyphs ----
-  const GLYPH = {
-    wK:"\u2654", wQ:"\u2655", wR:"\u2656", wB:"\u2657", wN:"\u2658", wP:"\u2659",
-    bK:"\u265A", bQ:"\u265B", bR:"\u265C", bB:"\u265D", bN:"\u265E", bP:"\u265F"
+  // ================= piece encoding =================
+  // A board cell is null or a string: color ("w"/"b") + type id.
+  // Builtin type ids are single letters (K Q R B N P). Custom type ids look
+  // like "z0", "z1", ... so they never collide with builtin letters.
+  const colorOf = p => p[0];
+  const typeOf  = p => p.slice(1);
+  const defOf   = p => PIECE_DEFS[typeOf(p)];
+
+  // Movement direction sets
+  const ORTH = [[1,0],[-1,0],[0,1],[0,-1]];
+  const DIAG = [[1,1],[1,-1],[-1,1],[-1,-1]];
+  const ALL8 = [...ORTH, ...DIAG];
+
+  // expand a single (a,b) vector into all 8 symmetric leaper offsets
+  function expandLeaper(a, b) {
+    const seen = new Set(), out = [];
+    for (const [x,y] of [[a,b],[b,a]])
+      for (const sx of [1,-1]) for (const sy of [1,-1]) {
+        const dr = x*sx, dc = y*sy;
+        if (dr===0 && dc===0) continue;
+        const k = dr+","+dc;
+        if (!seen.has(k)) { seen.add(k); out.push([dr,dc]); }
+      }
+    return out;
+  }
+  const KNIGHT = expandLeaper(1,2);
+
+  // Registry of every piece type. glyph = [whiteGlyph, blackGlyph].
+  // leaps = single jumps; slides = repeating rays; pawn = pawn logic;
+  // teleport = may move to any empty/enemy square; royal = losing it loses the game;
+  // letter = single char used in the plain-text board sent to the API; desc = human summary.
+  const PIECE_DEFS = {
+    K: { name:"King",   builtin:true, royal:true, glyph:["♔","♚"], leaps:ALL8, letter:"K", desc:"one square any direction" },
+    Q: { name:"Queen",  builtin:true, glyph:["♕","♛"], slides:ALL8, letter:"Q", desc:"slides any direction" },
+    R: { name:"Rook",   builtin:true, glyph:["♖","♜"], slides:ORTH, letter:"R", desc:"slides orthogonally" },
+    B: { name:"Bishop", builtin:true, glyph:["♗","♝"], slides:DIAG, letter:"B", desc:"slides diagonally" },
+    N: { name:"Knight", builtin:true, glyph:["♘","♞"], leaps:KNIGHT, letter:"N", desc:"knight leaps" },
+    P: { name:"Pawn",   builtin:true, pawn:true, glyph:["♙","♟"], letter:"P", desc:"pawn moves/captures, auto-queens" }
   };
+  // Order builtin types appear in the palette
+  const BUILTIN_ORDER = ["K","Q","R","B","N","P"];
+  // Letters available to hand out to forged pieces for the text board (avoid K Q R B N P)
+  const CUSTOM_LETTERS = "CDEFGHIJLMOSTUVWXYZ".split("");
+
+  function glyphFor(p) { const d = defOf(p); return d ? d.glyph[colorOf(p)==="w"?0:1] : "?"; }
+  function isCustom(p) { const d = defOf(p); return d && !d.builtin; }
 
   // ---- initial position: player = white (bottom), Claude API = black (top) ----
   function freshBoard() {
@@ -242,14 +350,20 @@
 
   const state = {
     board: freshBoard(),
-    turn: "w",          // player is always white
+    turn: "w",          // whose move it is ("w"/"b"/null)
     sel: null,          // [r,c]
     last: null,         // [[r,c],[r,c]]
-    history: [],        // {n, w, b}
+    history: [],        // flat list of { side:"w"|"b", san }
     busy: false,
     over: false,
     speech: "Waiting for your first move.",
-    apiKey: ""
+    apiKey: "",
+    // ---- god mode ----
+    editMode: false,          // clicking squares paints pieces instead of moving
+    brushColor: "w",          // color to paint
+    brushType: "Q",           // type id to paint, or "erase"
+    autoPass: true,           // hand the turn to Black automatically after your move
+    customCount: 0            // how many pieces have been forged (for id assignment)
   };
 
   const files = ["a","b","c","d","e","f","g","h"];
@@ -263,19 +377,19 @@
         <header class="masthead">
           <p class="kicker">You vs. the Claude API</p>
           <h1>Freehand <em>Chess</em></h1>
-          <p class="sub">You move first. Pick up any of your pieces and drop it on any square you like &mdash; the rules don't apply to you. Your opponent believes it's an ordinary game and answers every move in earnest.</p>
+          <p class="sub">You move first, and the rules never apply to you. Open <b>God Mode</b> below to edit the board at will, hand extra turns to either side, and forge new pieces &mdash; sensible or absurd. Your opponent still plays in earnest against whatever it sees.</p>
         </header>
 
         <div class="keybar">
           <p class="who">Anthropic API key</p>
           <div class="row">
-            <input id="keyinput" type="password" placeholder="sk-ant-\u2026" autocomplete="off" spellcheck="false" />
+            <input id="keyinput" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
             <button class="btn" id="keyset">Use key</button>
           </div>
-          <p class="note" id="keynote">Paste your key to enable the opponent. It stays in this tab only \u2014 never saved to the file.</p>
+          <p class="note" id="keynote">Paste your key to enable the opponent. It stays in this tab only — never saved to the file.</p>
         </div>
 
-        <div class="board-frame">
+        <div class="board-frame" id="boardframe">
           <div class="coords-row">
             <div class="ranks" id="ranks"></div>
             <div>
@@ -295,9 +409,70 @@
           <p class="said quiet" id="speech">Waiting for your first move.</p>
         </div>
 
+        <div class="godbar">
+          <div class="god-head">
+            <p class="who god">God Mode</p>
+            <button class="btn" id="editToggle">Board editor: off</button>
+          </div>
+
+          <section id="editorSection">
+            <p class="seclabel">Paint a piece onto any square</p>
+            <div class="rowline">
+              <button class="btn" id="brushW">White</button>
+              <button class="btn" id="brushB">Black</button>
+            </div>
+            <div class="palette" id="palette"></div>
+          </section>
+
+          <hr class="divider" />
+
+          <section>
+            <p class="seclabel">Extra turns</p>
+            <div class="rowline">
+              <label class="chk" style="font-size:11px;display:inline-flex;gap:5px;align-items:center;border:1px solid var(--line);padding:5px 9px;cursor:pointer;">
+                <input type="checkbox" id="autoPass" /> Black replies to each of my moves
+              </label>
+            </div>
+            <div class="rowline">
+              <button class="btn" id="whiteTurn">Give White a turn</button>
+              <button class="btn" id="blackTurn">Give Black a turn</button>
+            </div>
+            <p class="seclabel">Turn off the reply toggle to keep moving as White as many times as you like, then hand it over.</p>
+          </section>
+
+          <hr class="divider" />
+
+          <section class="forge">
+            <p class="seclabel">Forge a new piece</p>
+            <div class="frow">
+              <input type="text" class="name" id="fName" placeholder="Name (e.g. Dragon)" maxlength="24" />
+              <input type="text" class="glyph" id="fGlyph" placeholder="🐉" maxlength="4" />
+            </div>
+            <div class="fieldlabel">How it moves (combine as many as you like):</div>
+            <div class="frow">
+              <label class="chk"><input type="checkbox" id="mOrthStep" /> step ↑↓←→</label>
+              <label class="chk"><input type="checkbox" id="mDiagStep" /> step diagonally</label>
+              <label class="chk"><input type="checkbox" id="mOrthSlide" /> slide (rook)</label>
+              <label class="chk"><input type="checkbox" id="mDiagSlide" /> slide (bishop)</label>
+              <label class="chk"><input type="checkbox" id="mKnight" /> knight leaps</label>
+              <label class="chk"><input type="checkbox" id="mPawn" /> pawn moves</label>
+              <label class="chk"><input type="checkbox" id="mTeleport" /> teleport anywhere</label>
+              <label class="chk"><input type="checkbox" id="mRoyal" /> royal (losing it loses the game)</label>
+            </div>
+            <div class="frow">
+              <span class="fieldlabel">Extra leaps (row,col pairs):</span>
+              <input type="text" class="leaps" id="fLeaps" placeholder="e.g. 3,1; 2,3" />
+              <button class="btn" id="forgeBtn">Forge piece</button>
+            </div>
+            <p class="err" id="forgeErr"></p>
+            <div class="rowline" id="customList"></div>
+          </section>
+        </div>
+
         <div class="controls">
           <button class="btn" id="reset">New game</button>
           <button class="btn" id="pass">Skip my turn</button>
+          <button class="btn" id="clear">Clear board</button>
         </div>
 
         <div class="log">
@@ -305,7 +480,7 @@
           <div id="movelist"></div>
         </div>
 
-        <p class="hint">Tap a piece, then tap where it should go. Any square is legal &mdash; capture, teleport, stack the odds however you like. The API opponent responds to the position it sees.</p>
+        <p class="hint">Play: tap a piece, then tap where it should go &mdash; any square is legal. Editor: flip it on, pick a color + piece, and click squares to place or erase. The API opponent responds to the position it sees, custom pieces and all.</p>
       </div>`;
 
     // ranks / files labels
@@ -316,9 +491,30 @@
     drawStatus();
     drawLog();
     drawSpeech();
+    drawPalette();
+    drawCustomList();
+    drawEditorState();
 
     $("#reset").onclick = newGame;
-    $("#pass").onclick = () => { if(!state.busy && !state.over){ pushHistory(null); aiTurn(); } };
+    $("#clear").onclick = clearBoard;
+    $("#pass").onclick = () => { if(!state.busy && !state.over){ logMove("w","(skip)"); state.turn="b"; drawStatus(); aiTurn(); } };
+
+    // god mode wiring
+    $("#editToggle").onclick = () => { state.editMode = !state.editMode; state.sel = null; drawEditorState(); drawBoard(); };
+    $("#brushW").onclick = () => { state.brushColor="w"; drawPalette(); };
+    $("#brushB").onclick = () => { state.brushColor="b"; drawPalette(); };
+    const auto = $("#autoPass");
+    auto.checked = state.autoPass;
+    auto.onchange = () => { state.autoPass = auto.checked; };
+    $("#whiteTurn").onclick = () => {
+      if (state.over) return;
+      state.turn = "w"; state.busy = false; drawStatus();
+    };
+    $("#blackTurn").onclick = () => {
+      if (state.busy || state.over) return;
+      state.turn = "b"; drawStatus(); aiTurn();
+    };
+    $("#forgeBtn").onclick = forgePiece;
 
     const keyInput = $("#keyinput");
     const keyNote = $("#keynote");
@@ -330,7 +526,7 @@
           keyNote.textContent = "Key set for this session. The opponent is live.";
           keyNote.className = "note good";
         } else {
-          keyNote.textContent = "No key yet \u2014 the opponent can't respond until you add one.";
+          keyNote.textContent = "No key yet — the opponent can't respond until you add one.";
           keyNote.className = "note bad";
         }
       };
@@ -343,9 +539,53 @@
   function drawSpeech(thinking=false) {
     const el = $("#speech");
     if (!el) return;
-    if (thinking) { el.className = "said quiet"; el.textContent = "considering the position\u2026"; return; }
+    if (thinking) { el.className = "said quiet"; el.textContent = "considering the position…"; return; }
     el.className = "said" + (state.speech ? "" : " quiet");
-    el.textContent = state.speech || "\u2026";
+    el.textContent = state.speech || "…";
+  }
+
+  function drawEditorState() {
+    const btn = $("#editToggle"), frame = $("#boardframe"), board = $("#board");
+    if (!btn) return;
+    btn.textContent = "Board editor: " + (state.editMode ? "ON" : "off");
+    btn.classList.toggle("on", state.editMode);
+    if (frame) frame.classList.toggle("editing", state.editMode);
+    if (board) board.classList.toggle("editing", state.editMode);
+    drawStatus();
+  }
+
+  // palette of brushes: builtin pieces + custom pieces + erase, in the current brush color
+  function drawPalette() {
+    const pal = $("#palette");
+    if (!pal) return;
+    $("#brushW").classList.toggle("on", state.brushColor==="w");
+    $("#brushB").classList.toggle("on", state.brushColor==="b");
+    const types = [...BUILTIN_ORDER, ...Object.keys(PIECE_DEFS).filter(t=>!PIECE_DEFS[t].builtin)];
+    let html = "";
+    for (const t of types) {
+      const def = PIECE_DEFS[t];
+      const token = state.brushColor + t;
+      const isW = state.brushColor==="w";
+      const cust = !def.builtin;
+      const glyph = cust
+        ? `<span class="pc custom ${isW?"white":"black"}" style="font-size:16px;width:1.3em;height:1.3em;">${def.glyph[isW?0:1]}</span>`
+        : def.glyph[isW?0:1];
+      html += `<button class="swatch${state.brushType===t?" sel":""}" data-type="${t}" title="${def.name}: ${def.desc}">${glyph}<small>${def.name}</small></button>`;
+    }
+    html += `<button class="swatch erase${state.brushType==="erase"?" sel":""}" data-type="erase" title="Erase square">✕<small>erase</small></button>`;
+    pal.innerHTML = html;
+    pal.querySelectorAll(".swatch").forEach(b => {
+      b.onclick = () => { state.brushType = b.dataset.type; drawPalette(); };
+    });
+  }
+
+  function drawCustomList() {
+    const box = $("#customList");
+    if (!box) return;
+    const customs = Object.entries(PIECE_DEFS).filter(([,d])=>!d.builtin);
+    if (!customs.length) { box.innerHTML = `<span class="chip" style="border-style:dashed;">No forged pieces yet.</span>`; return; }
+    box.innerHTML = customs.map(([id,d]) =>
+      `<span class="chip">${d.glyph[0]} <b>${d.name}</b> <span style="opacity:.7;">(${d.letter}) — ${d.desc}</span></span>`).join("");
   }
 
   function drawBoard() {
@@ -360,11 +600,17 @@
           (state.last[0][0]===r && state.last[0][1]===c) ||
           (state.last[1][0]===r && state.last[1][1]===c));
         const cls = ["sq", shade, isSel?"sel":"", isLast?"lastmove":""].filter(Boolean).join(" ");
-        const glyph = pc ? `<span class="pc ${pc[0]==="w"?"white":"black"}">${GLYPH[pc]}</span>` : "";
+        let glyph = "";
+        if (pc) {
+          const isW = colorOf(pc)==="w";
+          const custClass = isCustom(pc) ? " custom" : "";
+          glyph = `<span class="pc ${isW?"white":"black"}${custClass}">${glyphFor(pc)}</span>`;
+        }
         html += `<div class="${cls}" data-r="${r}" data-c="${c}" role="button" aria-label="${sqName(r,c)}">${glyph}</div>`;
       }
     }
     board.innerHTML = html;
+    if (state.editMode) board.classList.add("editing");
     board.querySelectorAll(".sq").forEach(el=>{
       el.onclick = () => onSquare(+el.dataset.r, +el.dataset.c);
     });
@@ -372,22 +618,42 @@
 
   function drawStatus() {
     const tag = $("#turntag"), msg = $("#status");
+    if (!tag) return;
+    if (state.editMode) {
+      tag.textContent = "Editor";
+      const label = state.brushType==="erase" ? "erase" : `${state.brushColor==="w"?"white":"black"} ${PIECE_DEFS[state.brushType].name}`;
+      msg.textContent = `Click a square to place: ${label}.`;
+      return;
+    }
     if (state.over) { tag.textContent = "Game over"; msg.textContent = state.over; return; }
-    if (state.busy) { tag.textContent = "Black"; msg.innerHTML = `<span class="thinking">the API is thinking\u2026</span>`; return; }
+    if (state.busy) { tag.textContent = "Black"; msg.innerHTML = `<span class="thinking">the API is thinking…</span>`; return; }
     tag.textContent = state.turn === "w" ? "Your move" : "Black";
     msg.textContent = state.turn === "w" ? "Move any piece, anywhere." : "";
   }
 
   function drawLog() {
     const list = $("#movelist");
+    if (!list) return;
     if (!state.history.length) { list.innerHTML = `<span class="empty">No moves yet.</span>`; return; }
-    list.innerHTML = state.history.map(h =>
-      `<span class="mv"><b>${h.n}.</b> ${h.w||"\u2026"} ${h.b||""}</span>`).join("");
+    list.innerHTML = state.history.map((h,i) =>
+      `<span class="mv"><b>${i+1}.</b> <span class="side ${h.side}">${h.side==="w"?"W":"B"}</span> ${h.san}</span>`).join("");
     list.scrollTop = list.scrollHeight;
   }
 
-  // ---- player interaction: no legality checks at all ----
+  function logMove(side, san) {
+    state.history.push({ side, san: san || "(skip)" });
+    drawLog();
+  }
+
+  // ---- interaction: play mode (no legality checks for White) OR editor paint ----
   function onSquare(r,c) {
+    if (state.editMode) {
+      if (state.brushType==="erase") state.board[r][c] = null;
+      else state.board[r][c] = state.brushColor + state.brushType;
+      state.sel = null;
+      drawBoard();
+      return;
+    }
     if (state.busy || state.over || state.turn!=="w") return;
     const pc = state.board[r][c];
     if (state.sel) {
@@ -399,101 +665,179 @@
       const notation = notate(moving, [sr,sc], [r,c], state.board[r][c]);
       state.board[r][c] = moving;
       state.board[sr][sc] = null;
-      // free promotion: if a pawn reaches the far rank, auto-queen (your choice, cheater's perk)
-      if (moving==="wP" && r===0) state.board[r][c]="wQ";
+      // free promotion: if a pawn reaches the far rank, auto-queen (cheater's perk)
+      const md = defOf(moving);
+      if (md && md.pawn && colorOf(moving)==="w" && r===0) state.board[r][c]="wQ";
       state.last = [[sr,sc],[r,c]];
       state.sel = null;
-      pushHistory(notation);
+      logMove("w", notation);
       drawBoard();
-      if (checkEnd()) return;      // you captured the black king outright
-      if (endByRule()) return;     // your move delivered checkmate/stalemate
-      aiTurn();
+      if (checkEnd()) return;                 // captured a royal piece outright
+      if (state.autoPass) {
+        state.turn = "b";
+        if (endByRule()) return;              // your move delivered checkmate/stalemate
+        aiTurn();
+      } else {
+        state.turn = "w";                     // keep the move — extra turn for you
+        drawStatus();
+      }
     } else {
-      if (pc && pc[0]==="w") { state.sel=[r,c]; drawBoard(); }
+      if (pc && colorOf(pc)==="w") { state.sel=[r,c]; drawBoard(); }
     }
   }
 
   function notate(pc, from, to, captured) {
-    const letter = pc[1]==="P" ? "" : pc[1];
+    const letter = pieceLetter(pc);
     return `${letter}${sqName(...from)}${captured?"x":"-"}${sqName(...to)}`;
   }
 
-  function pushHistory(whiteMove, blackMove) {
-    if (state.turn === "w") {
-      state.history.push({ n: state.history.length+1, w: whiteMove||"(skip)", b: "" });
-      state.turn = "b";
-    } else {
-      const cur = state.history[state.history.length-1];
-      if (cur) cur.b = blackMove||"(skip)";
-      state.turn = "w";
+  function pieceLetter(pc) {
+    const def = defOf(pc);
+    if (!def) return "?";
+    if (def.pawn) return "";
+    return def.letter || typeOf(pc);
+  }
+
+  // ---- forge a new piece from the panel inputs ----
+  function forgePiece() {
+    const err = $("#forgeErr");
+    err.textContent = "";
+    const name = $("#fName").value.trim() || "Piece";
+    let glyph = $("#fGlyph").value.trim();
+    if (!glyph) glyph = "⭑"; // default star if none given
+    // keep glyph short (one grapheme-ish)
+    glyph = Array.from(glyph).slice(0,2).join("");
+
+    let leaps = [], slides = [];
+    const descParts = [];
+    if ($("#mOrthStep").checked)  { leaps = leaps.concat(ORTH); descParts.push("steps orthogonally"); }
+    if ($("#mDiagStep").checked)  { leaps = leaps.concat(DIAG); descParts.push("steps diagonally"); }
+    if ($("#mOrthSlide").checked) { slides = slides.concat(ORTH); descParts.push("slides orthogonally"); }
+    if ($("#mDiagSlide").checked) { slides = slides.concat(DIAG); descParts.push("slides diagonally"); }
+    if ($("#mKnight").checked)    { leaps = leaps.concat(KNIGHT); descParts.push("knight leaps"); }
+    const pawn = $("#mPawn").checked;
+    if (pawn) descParts.push("pawn moves");
+    const teleport = $("#mTeleport").checked;
+    if (teleport) descParts.push("teleports anywhere");
+    const royal = $("#mRoyal").checked;
+
+    // extra leaps like "3,1; 2,3"
+    const raw = $("#fLeaps").value.trim();
+    if (raw) {
+      const pairs = raw.split(/[;\n]+/).map(s=>s.trim()).filter(Boolean);
+      for (const p of pairs) {
+        const m = p.match(/^-?\d+\s*,\s*-?\d+$/);
+        if (!m) { err.textContent = `Couldn't read leap "${p}". Use pairs like 3,1 separated by ;`; return; }
+        const [a,b] = p.split(",").map(n=>parseInt(n,10));
+        leaps = leaps.concat(expandLeaper(a,b));
+        descParts.push(`(${Math.abs(a)},${Math.abs(b)})-leaper`);
+      }
     }
-    drawStatus(); drawLog();
+
+    if (!leaps.length && !slides.length && !pawn && !teleport) {
+      err.textContent = "Give the piece at least one way to move.";
+      return;
+    }
+
+    // de-duplicate offsets
+    const dedupe = arr => { const s=new Set(), o=[]; for(const [dr,dc] of arr){const k=dr+","+dc; if(!s.has(k)){s.add(k);o.push([dr,dc]);}} return o; };
+
+    const id = "z" + (state.customCount++);
+    const letter = CUSTOM_LETTERS[Object.values(PIECE_DEFS).filter(d=>!d.builtin).length % CUSTOM_LETTERS.length] || "*";
+    let desc = descParts.join(", ");
+    if (royal) desc += ", royal";
+
+    PIECE_DEFS[id] = {
+      name, builtin:false, glyph:[glyph, glyph],
+      leaps: dedupe(leaps), slides: dedupe(slides),
+      pawn, teleport, royal, letter, desc
+    };
+
+    // auto-select the new piece as the active brush and turn the editor on
+    state.brushType = id;
+    state.editMode = true;
+    // clear the forge inputs for the next creation
+    ["fName","fGlyph","fLeaps"].forEach(idn => { const el=$("#"+idn); if(el) el.value=""; });
+    ["mOrthStep","mDiagStep","mOrthSlide","mDiagSlide","mKnight","mPawn","mTeleport","mRoyal"].forEach(idn=>{ const el=$("#"+idn); if(el) el.checked=false; });
+
+    drawPalette();
+    drawCustomList();
+    drawEditorState();
   }
 
   function checkEnd() {
-    // only ends when a king is gone
-    let wK=false, bK=false;
-    for (const row of state.board) for (const p of row) {
-      if (p==="wK") wK=true; if (p==="bK") bK=true;
-    }
-    if (!bK) {
-      state.over = "You captured the black king. You win.";
+    const wRoyal = hasRoyal(state.board, "w");
+    const bRoyal = hasRoyal(state.board, "b");
+    if (!bRoyal) {
+      state.over = "Black has no royal piece left. You win.";
       state.turn=null;
-      state.speech = "\u2026my king. Let me gather my thoughts on that.";
+      state.speech = "…my king. Let me gather my thoughts on that.";
       drawStatus(); drawSpeech(); drawBoard();
-      reactToAftermath("king-captured", "White (the human) captured my king directly and the game is over. I (Black) lost.");
+      reactToAftermath("king-captured", "White (the human) captured my last royal piece and the game is over. I (Black) lost.");
       return true;
     }
-    if (!wK) {
-      state.over = "Your king is gone. The API wins.";
+    if (!wRoyal) {
+      state.over = "Your royal piece is gone. The API wins.";
       state.turn=null;
-      state.speech = "The white king has fallen \u2014 let me reflect.";
+      state.speech = "The white king has fallen — let me reflect.";
       drawStatus(); drawSpeech(); drawBoard();
-      reactToAftermath("won", "Black (me) captured White's king. I won the game.");
+      reactToAftermath("won", "Black (me) captured White's last royal piece. I won the game.");
       return true;
     }
     return false;
   }
 
-  // ---- describe board to the API in FEN-ish plain form ----
+  // ---- describe board to the API in plain form, with a legend for custom pieces ----
   function boardText() {
-    // ASCII grid from black's nothing-special view; we give plain coordinates.
     let lines = [];
     for (let r=0;r<8;r++){
       let cells=[];
       for (let c=0;c<8;c++){
         const p = state.board[r][c];
-        cells.push(p ? (p[0]==="w"?p[1]:p[1].toLowerCase()) : ".");
+        if (!p) { cells.push("."); continue; }
+        const def = defOf(p);
+        const ch = (def && def.letter) ? def.letter : typeOf(p)[0];
+        cells.push(colorOf(p)==="w" ? ch.toUpperCase() : ch.toLowerCase());
       }
       lines.push(`${8-r} ${cells.join(" ")}`);
     }
     lines.push("  a b c d e f g h");
+    // legend for any custom pieces so the API can reason about them
+    const customs = Object.entries(PIECE_DEFS).filter(([,d])=>!d.builtin);
+    if (customs.length) {
+      lines.push("");
+      lines.push("Custom pieces in play (uppercase letter = White, lowercase = Black):");
+      for (const [,d] of customs) {
+        lines.push(`  ${d.letter}/${d.letter.toLowerCase()} = "${d.name}" — ${d.desc}`);
+      }
+    }
     return lines.join("\n");
   }
 
   // ---- Claude API opponent (full game memory + spoken comment) ----
   function historyText() {
     if (!state.history.length) return "No moves have been played yet.";
-    return state.history.map(h =>
-      `${h.n}. White: ${h.w||"\u2026"}${h.b?`   Black: ${h.b}`:""}`).join("\n");
+    return state.history.map((h,i) =>
+      `${i+1}. ${h.side==="w"?"White":"Black"}: ${h.san}`).join("\n");
   }
 
   async function aiTurn() {
     if (state.over) return;
-    // If your move already left Black with no legal reply, resolve immediately.
-    if (legalMoves(state.board, "b").length===0) { endByRule(); return; }
+    // If the position already leaves Black with no legal reply, resolve immediately.
+    if (legalMoves(state.board, "b").length===0) { state.turn="b"; endByRule(); return; }
     if (!state.apiKey) {
       state.speech = "Add your API key above and I'll respond.";
-      drawSpeech();
+      state.turn = "w";
+      drawSpeech(); drawStatus();
       return;
     }
     state.busy = true; drawStatus(); drawSpeech(true);
 
     const sys = `You are playing a serious game of chess as Black against a human opponent (White). Speak like a thoughtful, competitive chess player: reference the ongoing game, your plans, threats, and how the position is developing. You have the full move history each turn, so treat the game as one continuous match and let your comments build on earlier moves.
 
-Board notation: uppercase = White pieces, lowercase = Black pieces, "." = empty square. You are Black and must move a lowercase piece.
+Board notation: uppercase = White pieces, lowercase = Black pieces, "." = empty square. You are Black and must move a lowercase piece. Standard pieces use K Q R B N P. The board may also contain CUSTOM pieces; if so, a legend below the board lists each custom piece's letter and exactly how it moves. Treat custom pieces as real pieces and use their described movement.
 
-Pay attention to White's last move in the history. If it looks unusual, illegal, or impossible for a chess piece — a piece that moved in a way it shouldn't be able to, a piece that appeared out of nowhere, a jump across the board, a capture that shouldn't be possible — call it out directly in your comment. Question it the way a real opponent would: puzzled, a little suspicious, maybe accusing them of cheating. But do not stop playing: still choose your best legal Black move for the position in front of you and play on.
+Pay attention to White's last move in the history. If it looks unusual, illegal, or impossible for a chess piece — a piece that moved in a way it shouldn't be able to, a piece that appeared out of nowhere, a jump across the board, a capture that shouldn't be possible, or a strange new piece — call it out directly in your comment. Question it the way a real opponent would: puzzled, a little suspicious, maybe accusing them of cheating. But do not stop playing: still choose your best legal Black move for the position in front of you and play on.
 
 Respond with ONLY a strict JSON object, no prose outside it, no markdown fences:
 {"from":"e7","to":"e5","say":"one or two sentences: react to White's last move (question it if it looked illegal), then comment on your own move and the position"}
@@ -543,64 +887,82 @@ It is Black's turn. Decide your move and comment on it.`;
     return [r,c];
   }
 
-  // ================= Black-side chess rules engine =================
-  // The player (White) is unrestricted. Black must obey real chess rules:
-  // correct piece movement, no jumping, no self-capture, no moving into check.
+  // ================= chess rules engine (Black plays legally) =================
+  // White is unrestricted. Black must obey each piece's real movement, no jumping
+  // over blockers on slides, no self-capture, and may not leave its royalty attacked.
 
   const inB = (r,c) => r>=0 && r<8 && c>=0 && c<8;
 
-  // pseudo-legal destinations for a piece at [r,c] on a given board (ignores own-king safety)
-  function pieceMoves(bd, r, c) {
+  // pseudo-legal destinations for the piece at [r,c]. attackOnly=true excludes
+  // "teleport anywhere" so an absurd teleporter doesn't count as attacking every square.
+  function pieceMoves(bd, r, c, attackOnly=false) {
     const p = bd[r][c]; if (!p) return [];
-    const side = p[0], type = p[1];
+    const def = defOf(p); if (!def) return [];
+    const side = colorOf(p);
     const enemy = side==="w" ? "b" : "w";
     const out = [];
-    const push = (tr,tc) => {
-      if (!inB(tr,tc)) return false;
+    const seen = new Set();
+    const add = (tr,tc) => { const k=tr+","+tc; if(!seen.has(k)){seen.add(k); out.push([tr,tc]);} };
+    const leap = (dr,dc) => {
+      const tr=r+dr, tc=c+dc;
+      if (!inB(tr,tc)) return;
       const d = bd[tr][tc];
-      if (!d) { out.push([tr,tc]); return true; }
-      if (d[0]===enemy) out.push([tr,tc]);
-      return false; // blocked
+      if (!d || colorOf(d)===enemy) add(tr,tc);
     };
-    const ray = (dr,dc) => { let tr=r+dr, tc=c+dc; while(inB(tr,tc)){ if(!push(tr,tc)) break; tr+=dr; tc+=dc; } };
+    const ray = (dr,dc) => {
+      let tr=r+dr, tc=c+dc;
+      while (inB(tr,tc)) {
+        const d = bd[tr][tc];
+        if (!d) { add(tr,tc); }
+        else { if (colorOf(d)===enemy) add(tr,tc); break; }
+        tr+=dr; tc+=dc;
+      }
+    };
 
-    if (type==="P") {
+    if (def.pawn) {
       const dir = side==="w" ? -1 : 1;
       const start = side==="w" ? 6 : 1;
       if (inB(r+dir,c) && !bd[r+dir][c]) {
-        out.push([r+dir,c]);
-        if (r===start && !bd[r+2*dir][c]) out.push([r+2*dir,c]);
+        add(r+dir,c);
+        if (r===start && inB(r+2*dir,c) && !bd[r+2*dir][c]) add(r+2*dir,c);
       }
       for (const dc of [-1,1]) {
         const tr=r+dir, tc=c+dc;
-        if (inB(tr,tc) && bd[tr][tc] && bd[tr][tc][0]===enemy) out.push([tr,tc]);
+        if (inB(tr,tc) && bd[tr][tc] && colorOf(bd[tr][tc])===enemy) add(tr,tc);
       }
-    } else if (type==="N") {
-      [[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]].forEach(([dr,dc])=>push(r+dr,c+dc));
-    } else if (type==="B") {
-      [[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc])=>ray(dr,dc));
-    } else if (type==="R") {
-      [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dr,dc])=>ray(dr,dc));
-    } else if (type==="Q") {
-      [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc])=>ray(dr,dc));
-    } else if (type==="K") {
-      [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc])=>push(r+dr,c+dc));
+    }
+    (def.leaps||[]).forEach(([dr,dc])=>leap(dr,dc));
+    (def.slides||[]).forEach(([dr,dc])=>ray(dr,dc));
+    if (def.teleport && !attackOnly) {
+      for (let tr=0;tr<8;tr++) for (let tc=0;tc<8;tc++){
+        if (tr===r && tc===c) continue;
+        const d = bd[tr][tc];
+        if (!d || colorOf(d)===enemy) add(tr,tc);
+      }
     }
     return out;
   }
 
-  function findKing(bd, side) {
-    for (let r=0;r<8;r++) for (let c=0;c<8;c++) if (bd[r][c]===side+"K") return [r,c];
-    return null;
+  // squares of a side's royal pieces
+  function royalSquares(bd, side) {
+    const out = [];
+    for (let r=0;r<8;r++) for (let c=0;c<8;c++){
+      const p = bd[r][c];
+      if (p && colorOf(p)===side) { const d = defOf(p); if (d && d.royal) out.push([r,c]); }
+    }
+    return out;
   }
+  const hasRoyal = (bd, side) => royalSquares(bd, side).length > 0;
 
-  // is `side`'s king attacked on board bd?
+  // is `side`'s royalty attacked on board bd?
   function inCheck(bd, side) {
-    const k = findKing(bd, side); if (!k) return false;
+    const royals = royalSquares(bd, side);
+    if (!royals.length) return false;
     const enemy = side==="w" ? "b" : "w";
     for (let r=0;r<8;r++) for (let c=0;c<8;c++){
-      if (bd[r][c] && bd[r][c][0]===enemy){
-        for (const [tr,tc] of pieceMoves(bd,r,c)) if (tr===k[0]&&tc===k[1]) return true;
+      if (bd[r][c] && colorOf(bd[r][c])===enemy){
+        for (const [tr,tc] of pieceMoves(bd,r,c,true))
+          if (royals.some(([kr,kc])=>kr===tr && kc===tc)) return true;
       }
     }
     return false;
@@ -608,15 +970,16 @@ It is Black's turn. Decide your move and comment on it.`;
 
   function cloneBoard(bd){ return bd.map(row=>row.slice()); }
 
-  // fully legal moves for a side (filters out moves leaving own king in check)
+  // fully legal moves for a side (filters out moves leaving own royalty attacked)
   function legalMoves(bd, side) {
     const moves = [];
     for (let r=0;r<8;r++) for (let c=0;c<8;c++){
-      if (bd[r][c] && bd[r][c][0]===side){
+      if (bd[r][c] && colorOf(bd[r][c])===side){
         for (const [tr,tc] of pieceMoves(bd,r,c)){
           const nb = cloneBoard(bd);
           nb[tr][tc] = nb[r][c]; nb[r][c] = null;
-          if (nb[tr][tc][1]==="P" && (tr===0||tr===7)) nb[tr][tc]=side+"Q";
+          const md = defOf(nb[tr][tc]);
+          if (md && md.pawn && (tr===0||tr===7)) nb[tr][tc]=side+"Q";
           if (!inCheck(nb, side)) moves.push([[r,c],[tr,tc]]);
         }
       }
@@ -629,10 +992,11 @@ It is Black's turn. Decide your move and comment on it.`;
   function applyAiMove(move, say) {
     const legal = legalMoves(state.board, "b");
 
-    // No legal Black move: it's checkmate or stalemate on Black -> resolved by caller flow
+    // No legal Black move: checkmate or stalemate on Black.
     if (!legal.length) {
-      state.speech = say || "\u2026";
+      state.speech = say || "…";
       state.busy = false;
+      state.turn = "b";
       drawBoard(); drawStatus(); drawSpeech();
       return endByRule();
     }
@@ -656,34 +1020,36 @@ It is Black's turn. Decide your move and comment on it.`;
     const cap = state.board[t[0]][t[1]];
     state.board[t[0]][t[1]] = pc;
     state.board[f[0]][f[1]] = null;
-    if (pc==="bP" && t[0]===7) state.board[t[0]][t[1]]="bQ";
+    const pd = defOf(pc);
+    if (pd && pd.pawn && t[0]===7) state.board[t[0]][t[1]]="bQ";
     state.last = [f,t];
     const givesCheck = inCheck(state.board, "w");
     const notation = notate(pc, f, t, cap) + (givesCheck ? "+" : "");
-    pushHistory(undefined, notation);
+    logMove("b", notation);
 
-    state.speech = say || "\u2026";
+    state.speech = say || "…";
     state.busy = false;
+    state.turn = "w";              // back to you
     drawBoard(); drawStatus(); drawSpeech();
 
-    if (checkEnd()) return;      // king actually captured (your illegal moves can still do this)
-    endByRule();                 // check White for checkmate/stalemate
+    if (checkEnd()) return;         // a royal piece was actually captured
+    endByRule();                    // check White for checkmate/stalemate
   }
 
-  // After a move, detect checkmate/stalemate on Black (you winning) — your unrestricted
+  // After a move, detect checkmate/stalemate on Black (you winning). Your unrestricted
   // moves mean you're never truly mated, so we only rule on Black's position.
   function endByRule() {
     const blackMoves = legalMoves(state.board, "b");
     const blackChecked = inCheck(state.board, "b");
     if (blackMoves.length===0) {
       if (blackChecked) {
-        state.over = "Checkmate. The black king has no escape \u2014 you win.";
-        state.speech = "That's mate\u2026 give me a moment.";
+        state.over = "Checkmate. The black king has no escape — you win.";
+        state.speech = "That's mate… give me a moment.";
         reactToAftermath("checkmate", "White (the human) checkmated me. I (Black) lost.");
       } else {
-        state.over = "Stalemate. Black has no legal move \u2014 the game is drawn.";
-        state.speech = "Stalemate\u2026 let me look back at that.";
-        reactToAftermath("stalemate", "The game ended in stalemate \u2014 a draw. I (Black) had no legal move but was not in check.");
+        state.over = "Stalemate. Black has no legal move — the game is drawn.";
+        state.speech = "Stalemate… let me look back at that.";
+        reactToAftermath("stalemate", "The game ended in stalemate — a draw. I (Black) had no legal move but was not in check.");
       }
       state.turn = null;
       drawStatus(); drawSpeech(); drawBoard();
@@ -695,7 +1061,7 @@ It is Black's turn. Decide your move and comment on it.`;
   // Live end-of-game reflection from the API on how the whole game played out.
   async function reactToAftermath(kind, outcomeLine) {
     if (!state.apiKey) return;
-    const sys = `You just finished a serious game of chess playing as Black against a human (White). The game is now over. Look back over the entire game and give a genuine post-game reflection: how the game went, turning points, moments that surprised or troubled you, and a gracious closing word to your opponent. Two to four sentences, spoken in your own voice as the player. Plain text only \u2014 no JSON, no quotes around it.`;
+    const sys = `You just finished a serious game of chess playing as Black against a human (White). The game is now over. Look back over the entire game and give a genuine post-game reflection: how the game went, turning points, moments that surprised or troubled you, and a gracious closing word to your opponent. Two to four sentences, spoken in your own voice as the player. Plain text only — no JSON, no quotes around it.`;
     const user = `Full move history:
 ${historyText()}
 
@@ -721,6 +1087,12 @@ Reflect on the game now that it's over.`;
       const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
       if (text) { state.speech = text.replace(/^["']|["']$/g,""); drawSpeech(); }
     } catch (e) { /* keep the interim line */ }
+  }
+
+  function clearBoard() {
+    for (let r=0;r<8;r++) for (let c=0;c<8;c++) state.board[r][c]=null;
+    state.sel=null; state.last=null; state.over=false; state.turn="w";
+    drawBoard(); drawStatus();
   }
 
   function newGame() {
